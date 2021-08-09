@@ -204,9 +204,13 @@ void TreeOperations::loadNamespaceItems(
           return callback(err);
         }
 
+        QSettings appSettings;
+        const uint maxChilds = appSettings.value("app/treeItemMaxChilds", 1000).toUInt();
+
         auto settings = ConnectionsTree::KeysTreeRenderer::RenderingSettigns{
             QRegExp(filter), getNamespaceSeparator(), parent->getDbIndex(),
-            true};
+            true, maxChilds, true
+        };
 
         AsyncFuture::observe(
             QtConcurrent::run(&ConnectionsTree::KeysTreeRenderer::renderKeys,

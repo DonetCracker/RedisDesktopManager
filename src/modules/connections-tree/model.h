@@ -62,10 +62,6 @@ class Model : public QAbstractItemModel {
 
   QModelIndex getIndexFromItem(QWeakPointer<TreeItem>);
 
-  bool canFetchMore(const QModelIndex &parent) const override;
-
-  void fetchMore(const QModelIndex &parent) override;
-
   QSet<QByteArray> m_expanded;
 
  signals:
@@ -73,30 +69,26 @@ class Model : public QAbstractItemModel {
 
   void error(const QString &err);
 
+ public:
   void itemChanged(QWeakPointer<TreeItem> item);
 
   void itemChildsLoaded(QWeakPointer<TreeItem> item);
 
   void itemChildsUnloaded(QWeakPointer<TreeItem> item);
 
+  void beforeChildLoaded(QWeakPointer<TreeItem> item, int count);
+
+  void childLoaded(QWeakPointer<TreeItem> item);
+
+  void beforeItemChildRemoved(QWeakPointer<TreeItem> item, int row);
+
+  void itemChildRemoved(QWeakPointer<TreeItem> item);
+
   void expandItem(QWeakPointer<TreeItem> item);
 
   void beforeItemLayoutChanged(QWeakPointer<TreeItem> item);
 
   void itemLayoutChanged(QWeakPointer<TreeItem> item);
-
- protected slots:
-  void onItemChanged(QWeakPointer<TreeItem>);
-
-  void onItemChildsLoaded(QWeakPointer<TreeItem> item);
-
-  void onItemChildsUnloaded(QWeakPointer<TreeItem> item);
-
-  void onExpandItem(QWeakPointer<TreeItem> item);
-
-  void onBeforeItemLayoutChanged(QWeakPointer<TreeItem> item);
-
-  void onItemLayoutChanged(QWeakPointer<TreeItem> item);
 
  public slots:
   QVariant getMetadata(const QModelIndex &index, const QString &metaKey);

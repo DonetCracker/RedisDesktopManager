@@ -8,6 +8,7 @@
 #include "connections-tree/keysrendering.h"
 #include "databaseitem.h"
 #include "keyitem.h"
+#include "loadmoreitem.h"
 
 using namespace ConnectionsTree;
 
@@ -50,27 +51,54 @@ void NamespaceItem::setRemoved() {
 
   clear();
 
-  emit m_model.itemChanged(getSelf());
+  m_model.itemChanged(getSelf());
+}
+
+uint NamespaceItem::childCount(bool recursive) const
+{
+    bool notRenderedNs = !m_loaderStub && m_childItems.size() == 0 && m_rawChildKeys.size() > 0;
+
+    if (notRenderedNs) {
+        return m_rawChildKeys.size();
+    } else {
+        return AbstractNamespaceItem::childCount(recursive);
+    }
+}
+
+void NamespaceItem::appendRawKey(const QByteArray &k)
+{
+    m_rawChildKeys.append(k);
 }
 
 void NamespaceItem::load() {
-  if (m_rawChildKeys.size() > 0) {
-      // NOTE(u_glide): No need to sort keys here because it was sorted on load
+  if (m_rawChildKeys.size() > 0) {      
+      QSettings appSettings;
+      const uint maxChilds = appSettings.value("app/treeItemMaxChilds", 1000).toUInt();
+
       auto settings = ConnectionsTree::KeysTreeRenderer::RenderingSettigns{
-          m_filter, m_operations->getNamespaceSeparator(), m_dbIndex, false
+          m_filter, m_operations->getNamespaceSeparator(), m_dbIndex, false,
+          maxChilds, true
       };
+
+      auto rawKeys = m_rawChildKeys;
+      m_rawChildKeys.clear();
 
       AsyncFuture::observe(
           QtConcurrent::run(&ConnectionsTree::KeysTreeRenderer::renderKeys,
-                            m_operations, m_rawChildKeys, qSharedPointerDynamicCast<AbstractNamespaceItem>(getSelf()), settings,
+                            m_operations, rawKeys, qSharedPointerDynamicCast<AbstractNamespaceItem>(getSelf()), settings,
                             m_model.m_expanded))
           .subscribe([this]() {
-          m_rawChildKeys.clear();
-          unlock();
 
+          if (m_rawChildKeys.size() > 0) {
+              m_model.beforeChildLoaded(getSelf(), 1);
+              m_loaderStub = QSharedPointer<TreeItem>(new LoadMoreItem(getSelf(), m_model));
+              m_model.childLoaded(getSelf());
+          }
+
+          unlock();
           setExpanded(true);
-          emit m_model.itemChanged(getSelf());
-          emit m_model.expandItem(getSelf());
+          m_model.itemChanged(getSelf());
+          m_model.expandItem(getSelf());
 
       });
       return;
@@ -98,8 +126,8 @@ void NamespaceItem::load() {
         if (!err.isEmpty()) return showLoadingError(err);
 
         setExpanded(true);
-        emit m_model.itemChanged(getSelf());
-        emit m_model.expandItem(getSelf());
+        m_model.itemChanged(getSelf());
+        m_model.expandItem(getSelf());
       },
       m_model.m_expanded);
 }
@@ -123,8 +151,8 @@ QHash<QString, std::function<void()>> NamespaceItem::eventHandlers() {
       load();
     } else if (!isExpanded()) {
       setExpanded(true);
-      emit m_model.itemChanged(getSelf());
-      emit m_model.expandItem(getSelf());
+      m_model.itemChanged(getSelf());
+      m_model.expandItem(getSelf());
     }
   });
 

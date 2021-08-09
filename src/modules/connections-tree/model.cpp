@@ -12,18 +12,6 @@ using namespace ConnectionsTree;
 Model::Model(QObject *parent)
     : QAbstractItemModel(parent),
       m_rawPointers(new QHash<TreeItem *, QWeakPointer<TreeItem>>()) {
-  QObject::connect(this, &Model::itemChanged, this, &Model::onItemChanged);
-  QObject::connect(this, &Model::itemChildsLoaded, this,
-                   &Model::onItemChildsLoaded);
-  QObject::connect(this, &Model::itemChildsUnloaded, this,
-                   &Model::onItemChildsUnloaded);
-  QObject::connect(this, &Model::expandItem, this, &Model::onExpandItem);
-
-  QObject::connect(this, &Model::beforeItemLayoutChanged, this,
-                   &Model::onBeforeItemLayoutChanged);
-  QObject::connect(this, &Model::itemLayoutChanged, this,
-                   &Model::onItemLayoutChanged);
-
   qRegisterMetaType<QWeakPointer<TreeItem>>("QWeakPointer<TreeItem>");
 }
 
@@ -69,7 +57,7 @@ Qt::ItemFlags Model::flags(const QModelIndex &index) const {
 QModelIndex Model::index(int row, int column, const QModelIndex &parent) const {
   if (!hasIndex(row, column, parent)) return QModelIndex();
 
-  const TreeItem *parentItem = getItemFromIndex(parent);
+  TreeItem *parentItem = getItemFromIndex(parent);
   QSharedPointer<TreeItem> childItem;
 
   // get item from root items
@@ -114,7 +102,7 @@ bool Model::hasChildren(const QModelIndex &parent) const {
 
   if (!parentItem) return m_treeItems.size() > 0;
 
-  if (parentItem->type() == "key") return false;
+  if (!parentItem->supportChildItems()) return false;
 
   return parentItem->childCount() > 0;
 }
@@ -137,21 +125,7 @@ QModelIndex Model::getIndexFromItem(QWeakPointer<TreeItem> item) {
   return createIndex(item.toStrongRef()->row(), 0, (void *)item.data());
 }
 
-bool Model::canFetchMore(const QModelIndex &parent) const {
-  TreeItem *i = getItemFromIndex(parent);
-
-  return i && i->canFetchMore();
-}
-
-void Model::fetchMore(const QModelIndex &parent) {
-  TreeItem *i = getItemFromIndex(parent);
-
-  if (!i) return;
-
-  i->fetchMore();
-}
-
-void Model::onItemChanged(QWeakPointer<TreeItem> item) {
+void Model::itemChanged(QWeakPointer<TreeItem> item) {
   if (!item) return;
 
   auto index = getIndexFromItem(item);
@@ -161,7 +135,7 @@ void Model::onItemChanged(QWeakPointer<TreeItem> item) {
   emit dataChanged(index, index);
 }
 
-void Model::onItemChildsLoaded(QWeakPointer<TreeItem> item) {
+void Model::itemChildsLoaded(QWeakPointer<TreeItem> item) {
   if (!item) return;
 
   auto index = getIndexFromItem(item);
@@ -170,12 +144,13 @@ void Model::onItemChildsLoaded(QWeakPointer<TreeItem> item) {
 
   QSharedPointer<TreeItem> treeItem = item.toStrongRef();
 
-  if (!treeItem->childCount()) {
+  if (treeItem->getAllChilds().size() == 0) {
     return;
   }
 
-  emit beginInsertRows(index, 0, treeItem->childCount() - 1);
-  emit endInsertRows();
+  beginInsertRows(index, treeItem->childCountBeforeFetch(),
+                       treeItem->getAllChilds().size());
+  endInsertRows();
 
   emit dataChanged(index, index);
 
@@ -185,7 +160,7 @@ void Model::onItemChildsLoaded(QWeakPointer<TreeItem> item) {
     QSettings settings;
     m_expanded.clear();
 
-    if (settings.value("app/reopenNamespacesOnReload", true).toBool()) {     
+    if (settings.value("app/reopenNamespacesOnReload", true).toBool()) {
       restoreOpenedNamespaces(treeItem.staticCast<AbstractNamespaceItem>());
     }
   } else if (treeItem->type() == "server"
@@ -196,7 +171,7 @@ void Model::onItemChildsLoaded(QWeakPointer<TreeItem> item) {
   }
 }
 
-void Model::onItemChildsUnloaded(QWeakPointer<TreeItem> item) {
+void Model::itemChildsUnloaded(QWeakPointer<TreeItem> item) {
   if (!item) return;
 
   auto index = getIndexFromItem(item);
@@ -206,11 +181,64 @@ void Model::onItemChildsUnloaded(QWeakPointer<TreeItem> item) {
   if (item.toStrongRef()->childCount() == 0)
       return;
 
-  emit beginRemoveRows(index, 0, item.toStrongRef()->childCount() - 1);
-  emit endRemoveRows();
+  beginRemoveRows(index, 0, item.toStrongRef()->childCount() - 1);
+  endRemoveRows();
 }
 
-void Model::onExpandItem(QWeakPointer<TreeItem> item) {
+void Model::beforeChildLoaded(QWeakPointer<TreeItem> item, int count)
+{
+    if (!item) return;
+
+    auto index = getIndexFromItem(item);
+
+    if (!index.isValid()) return;
+
+    auto treeItem = item.toStrongRef();
+
+    if (!treeItem) return;
+
+    beginInsertRows(index, treeItem->getAllChilds().size(),
+                    treeItem->getAllChilds().size() + count - 1);
+}
+
+void Model::childLoaded(QWeakPointer<TreeItem> item)
+{
+    if (!item) return;
+
+    auto index = getIndexFromItem(item);
+
+    if (!index.isValid()) return;
+
+    endInsertRows();
+}
+
+void Model::beforeItemChildRemoved(QWeakPointer<TreeItem> item, int row)
+{
+    if (!item) return;
+
+    auto index = getIndexFromItem(item);
+
+    if (!index.isValid()) return;
+
+    qDebug() << "before child removal";
+
+    beginRemoveRows(index, row, row);
+}
+
+void Model::itemChildRemoved(QWeakPointer<TreeItem> item)
+{
+    if (!item) return;
+
+    auto strongRef = item.toStrongRef();
+
+    if (strongRef && m_rawPointers->contains(strongRef.data())) {
+        m_rawPointers->remove(strongRef.data());
+    }
+
+    endRemoveRows();
+}
+
+void Model::expandItem(QWeakPointer<TreeItem> item) {
   if (!item) return;
 
   auto index = getIndexFromItem(item);
@@ -220,7 +248,7 @@ void Model::onExpandItem(QWeakPointer<TreeItem> item) {
   emit expand(index);
 }
 
-void Model::onBeforeItemLayoutChanged(QWeakPointer<TreeItem> item) {
+void Model::beforeItemLayoutChanged(QWeakPointer<TreeItem> item) {
   if (!item) return;
 
   auto itemS = item.toStrongRef();
@@ -239,7 +267,7 @@ void Model::onBeforeItemLayoutChanged(QWeakPointer<TreeItem> item) {
   }
 }
 
-void Model::onItemLayoutChanged(QWeakPointer<TreeItem> item) {
+void Model::itemLayoutChanged(QWeakPointer<TreeItem> item) {
   if (!item) return;
 
   auto itemS = item.toStrongRef();
@@ -425,13 +453,13 @@ void Model::addRootItem(QSharedPointer<SortableTreeItem> item) {
 
   int insertIndex = m_treeItems.size();
 
-  emit beginInsertRows(QModelIndex(), insertIndex, insertIndex);
+  beginInsertRows(QModelIndex(), insertIndex, insertIndex);
 
   item->setRow(insertIndex);
 
   m_treeItems.push_back(item);
 
-  emit endInsertRows();
+  endInsertRows();
 
   if (item->isExpanded() && item->childCount() > 0) {
       QTimer::singleShot(100, this, [this, item]() {

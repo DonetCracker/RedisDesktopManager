@@ -29,6 +29,10 @@ class NamespaceItem : public AbstractNamespaceItem {
 
   void setRemoved();
 
+  uint childCount(bool recursive) const override;
+
+  void appendRawKey(const QByteArray& k) override;
+
  protected:
   void load();
 

@@ -29,7 +29,7 @@ class AbstractNamespaceItem : public QObject, public TreeItem, public MemoryUsag
 
   uint childCount(bool recursive = false) const override;
 
-  QSharedPointer<TreeItem> child(uint row) const override;
+  QSharedPointer<TreeItem> child(uint row) override;
 
   QWeakPointer<TreeItem> parent() const override;
 
@@ -37,9 +37,7 @@ class AbstractNamespaceItem : public QObject, public TreeItem, public MemoryUsag
     m_childItems.append(item);
   }
 
-  virtual void appendRawKey(const QByteArray& k) {
-    m_rawChildKeys.append(k);
-  }
+  virtual void appendRawKey(const QByteArray& k);
 
   virtual void appendNamespace(QSharedPointer<AbstractNamespaceItem> item);
 
@@ -67,7 +65,11 @@ class AbstractNamespaceItem : public QObject, public TreeItem, public MemoryUsag
 
   void cancelCurrentOperation() override;
 
-  void getMemoryUsage(std::function<void(qlonglong)>) override;
+  void getMemoryUsage(std::function<void(qlonglong)>) override; 
+
+  void fetchMore() override;
+
+  uint childCountBeforeFetch() override;
 
  protected:
   virtual void clear();
@@ -80,6 +82,7 @@ class AbstractNamespaceItem : public QObject, public TreeItem, public MemoryUsag
 
  protected:
   QWeakPointer<TreeItem> m_parent;
+  QSharedPointer<TreeItem> m_loaderStub;
   QSharedPointer<Operations> m_operations;
   QList<QSharedPointer<TreeItem>> m_childItems;
   QHash<QByteArray, QSharedPointer<AbstractNamespaceItem>> m_childNamespaces;
@@ -89,5 +92,6 @@ class AbstractNamespaceItem : public QObject, public TreeItem, public MemoryUsag
   uint m_dbIndex;
   QSharedPointer<AsyncFuture::Deferred<qlonglong>> m_runningOperation;
   bool m_showNsOnTop;
+  uint m_childCountBeforeFetch;
 };
 }  // namespace ConnectionsTree

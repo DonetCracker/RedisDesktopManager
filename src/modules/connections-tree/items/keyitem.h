@@ -23,7 +23,7 @@ class KeyItem : public TreeItem, public MemoryUsage {
 
   uint childCount(bool recursive = false) const override;
 
-  QSharedPointer<TreeItem> child(uint) const override;
+  QSharedPointer<TreeItem> child(uint) override;
 
   QWeakPointer<TreeItem> parent() const override;
 

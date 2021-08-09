@@ -139,7 +139,7 @@ void DatabaseItem::setMetadata(const QString& key, QVariant value) {
       liveUpdateTimer()->start();
     }
 
-    emit m_model.itemChanged(getSelf());
+    m_model.itemChanged(getSelf());
   }
 }
 
@@ -189,7 +189,7 @@ void DatabaseItem::performLiveUpdate() {
     if (m_childItems.size() >=
         settings.value("app/liveUpdateKeysLimit", 1000).toInt()) {
       liveUpdateTimer()->stop();
-      emit m_model.itemChanged(getSelf());
+      m_model.itemChanged(getSelf());
       QMessageBox::warning(
           nullptr,
           QCoreApplication::translate("RDM", "Live update was disabled"),
@@ -200,20 +200,20 @@ void DatabaseItem::performLiveUpdate() {
               "settings."));
     } else {
       liveUpdateTimer()->start();
-      emit m_model.itemChanged(getSelf());
+      m_model.itemChanged(getSelf());
     }
   });
 }
 
 void DatabaseItem::filterKeys(const QRegExp& filter) {
   m_filter = filter;
-  emit m_model.itemChanged(getSelf());
+  m_model.itemChanged(getSelf());
   reload();
 }
 
 void DatabaseItem::resetFilter() {
   m_filter = QRegExp(m_operations->defaultFilter());
-  emit m_model.itemChanged(getSelf());
+  m_model.itemChanged(getSelf());
   reload();
 }
 
@@ -229,7 +229,7 @@ QHash<QString, std::function<void()>> DatabaseItem::eventHandlers() {
   events.insert("right-click", [this]() {
     if (m_childItems.size() != 0) return;
 
-    emit m_model.itemChanged(getSelf());
+    m_model.itemChanged(getSelf());
   });
 
   events.insert("add_key", [this]() {

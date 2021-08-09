@@ -19,6 +19,8 @@ namespace ConnectionsTree {
             QString nsSeparator;
             uint dbIndex;
             bool sortKeys;
+            uint renderLimit;
+            bool notifyModel;
         };
 
     public:

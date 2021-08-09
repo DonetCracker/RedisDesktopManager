@@ -51,7 +51,8 @@ void KeysTreeRenderer::renderKeys(QSharedPointer<Operations> operations,
   }
   qDebug() << "Tree builded in: " << timer.elapsed() << " ms";
 
-  parent->notifyModel();
+  if (settings.notifyModel)
+    parent->notifyModel();
 }
 
 void KeysTreeRenderer::renderLazily(
@@ -76,9 +77,13 @@ void KeysTreeRenderer::renderLazily(
           : notProcessedKeyPart.indexOf(settings.nsSeparator);  
 
   if (indexOfNaspaceSeparator == -1) {
-    QSharedPointer<KeyItem> newKey(
-        new KeyItem(fullKey, currentParent, parent->model()));
-    parent->append(newKey);
+    if (parent->getAllChilds().size() >= settings.renderLimit) {
+        parent->appendRawKey(fullKey);
+    } else {
+        QSharedPointer<KeyItem> newKey(
+            new KeyItem(fullKey, currentParent, parent->model()));
+        parent->append(newKey);
+    }
     return;
   }
 

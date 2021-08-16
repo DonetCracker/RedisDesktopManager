@@ -13,6 +13,7 @@ namespace ConnectionsTree {
 class Operations;
 class AbstractNamespaceItem;
 class Model;
+class KeyItem;
 
 class AbstractNamespaceItem : public QObject, public TreeItem, public MemoryUsage {
 
@@ -29,13 +30,25 @@ class AbstractNamespaceItem : public QObject, public TreeItem, public MemoryUsag
 
   uint childCount(bool recursive = false) const override;
 
+  uint keysCount() const;
+
+  uint keysRenderingLimit() const;
+
   QSharedPointer<TreeItem> child(uint row) override;
 
   QWeakPointer<TreeItem> parent() const override;
 
-  virtual void append(QSharedPointer<TreeItem> item) {
-    m_childItems.append(item);
-  }
+  virtual void append(QSharedPointer<TreeItem> item);
+
+  virtual void insertChild(QSharedPointer<TreeItem> item);
+
+  virtual void appendKeyToIndex(QSharedPointer<KeyItem> key);
+
+  virtual void removeNamespacedKeysFromIndex(QByteArray nsPrefix);
+
+  virtual QHash<QByteArray, QWeakPointer<KeyItem>> getKeysIndex() const;
+
+  virtual void removeObsoleteKeys(QList<QWeakPointer<KeyItem>> keys);
 
   virtual void appendRawKey(const QByteArray& k);
 
@@ -48,8 +61,6 @@ class AbstractNamespaceItem : public QObject, public TreeItem, public MemoryUsag
 
     return m_childNamespaces[name];
   }
-
-  virtual void notifyModel();
 
   virtual bool isExpanded() const override { return m_expanded; }
 
@@ -76,6 +87,14 @@ class AbstractNamespaceItem : public QObject, public TreeItem, public MemoryUsag
 
   void sortChilds();
 
+  void renderRawKeys(const RedisClient::Connection::RawKeysList& keylist, QRegExp filter,
+                     std::function<void ()> callback,
+                     bool appendNewItems,
+                     bool checkPreRenderedItems,
+                     int maxChildItems=-1);
+
+  void ensureLoaderIsCreated();
+
   QHash<QString, std::function<void()>> eventHandlers() override;
 
   void calculateUsedMemory(QSharedPointer<AsyncFuture::Deferred<qlonglong>> parentD, std::function<void(qlonglong)> callback);
@@ -93,5 +112,6 @@ class AbstractNamespaceItem : public QObject, public TreeItem, public MemoryUsag
   QSharedPointer<AsyncFuture::Deferred<qlonglong>> m_runningOperation;
   bool m_showNsOnTop;
   uint m_childCountBeforeFetch;
+  QHash<QByteArray, QWeakPointer<KeyItem>> m_keysIndex;
 };
 }  // namespace ConnectionsTree

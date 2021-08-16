@@ -23,7 +23,7 @@ NamespaceItem::NamespaceItem(const QByteArray &fullPath,
 QString NamespaceItem::getDisplayName() const {
   QString title = QString("%1 (%2)")
                       .arg(printableString(getName(), true))
-                      .arg(childCount(true));
+                      .arg(keysCount());
 
   if (m_usedMemory > 0) {
     title.append(QString(" <b>[%1]</b>").arg(humanReadableSize(m_usedMemory)));
@@ -65,80 +65,66 @@ uint NamespaceItem::childCount(bool recursive) const
     }
 }
 
-void NamespaceItem::appendRawKey(const QByteArray &k)
-{
-    m_rawChildKeys.append(k);
-}
-
 void NamespaceItem::load() {
-  if (m_rawChildKeys.size() > 0) {      
-      QSettings appSettings;
-      const uint maxChilds = appSettings.value("app/treeItemMaxChilds", 1000).toUInt();
+  auto onKeysRendered = [this]() {
+    m_model.childLoaded(getSelf());
+    ensureLoaderIsCreated();
 
-      auto settings = ConnectionsTree::KeysTreeRenderer::RenderingSettigns{
-          m_filter, m_operations->getNamespaceSeparator(), m_dbIndex, false,
-          maxChilds, true
-      };
+    unlock();
+    setExpanded(true);
+    m_model.itemChanged(getSelf());
+    m_model.expandItem(getSelf());
+  };
 
-      auto rawKeys = m_rawChildKeys;
-      m_rawChildKeys.clear();
+  if (m_rawChildKeys.size() > 0) {
+    auto rawKeys = m_rawChildKeys;
+    m_rawChildKeys.clear();
 
-      AsyncFuture::observe(
-          QtConcurrent::run(&ConnectionsTree::KeysTreeRenderer::renderKeys,
-                            m_operations, rawKeys, qSharedPointerDynamicCast<AbstractNamespaceItem>(getSelf()), settings,
-                            m_model.m_expanded))
-          .subscribe([this]() {
+    int nextChunkSize = qMin(keysRenderingLimit(),
+                             static_cast<uint>(rawKeys.size()));
 
-          if (m_rawChildKeys.size() > 0) {
-              m_model.beforeChildLoaded(getSelf(), 1);
-              m_loaderStub = QSharedPointer<TreeItem>(new LoadMoreItem(getSelf(), m_model));
-              m_model.childLoaded(getSelf());
-          }
+    m_model.beforeChildLoaded(getSelf(), nextChunkSize);
 
-          unlock();
-          setExpanded(true);
-          m_model.itemChanged(getSelf());
-          m_model.expandItem(getSelf());
-
-      });
-      return;
+    return renderRawKeys(rawKeys, m_filter, onKeysRendered, true, false);
   }
 
-  QString nsFilter =  QString("%1%2*")
-      .arg(QString::fromUtf8(m_fullPath))
-      .arg(m_operations->getNamespaceSeparator());
+  QString nsFilter = QString("%1%2*")
+                         .arg(QString::fromUtf8(m_fullPath))
+                         .arg(m_operations->getNamespaceSeparator());
 
   if (!m_filter.isEmpty()) {
     if (m_filter.pattern().startsWith(nsFilter.chopped(1))) {
       nsFilter = m_filter.pattern();
     } else {
       nsFilter = QString("%1%2%3")
-          .arg(QString::fromUtf8(m_fullPath))
-          .arg(m_operations->getNamespaceSeparator())
-          .arg(m_filter.pattern());
+                     .arg(QString::fromUtf8(m_fullPath))
+                     .arg(m_operations->getNamespaceSeparator())
+                     .arg(m_filter.pattern());
     }
   }
 
   m_operations->loadNamespaceItems(
-      qSharedPointerDynamicCast<AbstractNamespaceItem>(getSelf()), nsFilter,
-      [this](const QString &err) {
-        unlock();
-        if (!err.isEmpty()) return showLoadingError(err);
+      m_dbIndex, nsFilter,
+      [this, nsFilter, onKeysRendered](
+          const RedisClient::Connection::RawKeysList &keylist,
+          const QString &err) {
+        if (!err.isEmpty()) {
+          unlock();
+          return showLoadingError(err);
+        }
 
-        setExpanded(true);
-        m_model.itemChanged(getSelf());
-        m_model.expandItem(getSelf());
-      },
-      m_model.m_expanded);
+        int nextChunkSize = qMin(keysRenderingLimit(),
+                                 static_cast<uint>(keylist.size()));
+
+        m_model.beforeChildLoaded(getSelf(), nextChunkSize);
+
+        return renderRawKeys(keylist, m_filter, onKeysRendered, true, false);
+      });
 }
 
 void NamespaceItem::reload() {
   lock();
-
-  if (m_childItems.size()) {
-    clear();
-  }
-
+  clear();
   load();
 }
 

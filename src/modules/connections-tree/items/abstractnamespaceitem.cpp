@@ -1,5 +1,7 @@
 #include "abstractnamespaceitem.h"
 
+#include <algorithm>
+#include <functional>
 #include <QApplication>
 #include <QMessageBox>
 #include <QThread>
@@ -60,29 +62,113 @@ QWeakPointer<TreeItem> AbstractNamespaceItem::parent() const {
   return m_parent;
 }
 
-void AbstractNamespaceItem::appendRawKey(const QByteArray &k) {
-    m_rawChildKeys.append(k);
-
-    if (!m_loaderStub) {
-        m_loaderStub = QSharedPointer<TreeItem>(new LoadMoreItem(getSelf(), m_model));
-    }
+void AbstractNamespaceItem::append(QSharedPointer<TreeItem> item) {    
+    m_childItems.append(item);    
 }
 
-bool compareNamespaces(QSharedPointer<TreeItem> first,
+bool compareTreeItemsByName(QSharedPointer<TreeItem> first,
+                            QSharedPointer<TreeItem> second) {
+    return first->getDisplayName() < second->getDisplayName();
+}
+
+bool compareTreeItemsByNameAndNsOnTop(QSharedPointer<TreeItem> first,
                        QSharedPointer<TreeItem> second) {
     if (first->type() != second->type()) return first->type() > second->type();
 
     return first->getDisplayName() < second->getDisplayName();
 }
 
+void AbstractNamespaceItem::insertChild(QSharedPointer<TreeItem> item)
+{
+    auto pos = std::upper_bound(m_childItems.begin(), m_childItems.end(), item,
+                                m_showNsOnTop ? compareTreeItemsByNameAndNsOnTop : compareTreeItemsByName);
+
+    int index = std::distance(m_childItems.begin(), pos);
+
+    m_model.beforeChildLoadedAtPos(getSelf(), index);
+    m_childItems.insert(pos, item);
+    m_model.childLoaded(getSelf());
+}
+
+void AbstractNamespaceItem::appendKeyToIndex(QSharedPointer<KeyItem> key)
+{
+    if (!key)
+        return;
+
+    m_keysIndex.insert(key->getFullPath(), key.toWeakRef());
+}
+
+void AbstractNamespaceItem::removeNamespacedKeysFromIndex(QByteArray nsPrefix)
+{
+    for (auto const &fullPath: m_keysIndex.keys()) {
+        if (fullPath.startsWith(nsPrefix)) {
+            m_keysIndex.remove(fullPath);
+        }
+    }
+}
+
+QHash<QByteArray, QWeakPointer<KeyItem> > AbstractNamespaceItem::getKeysIndex() const
+{
+    return m_keysIndex;
+}
+
+QSharedPointer<TreeItem> resolveItemToRemove(QSharedPointer<TreeItem> item) {
+  if (!item) return item;
+
+  auto parent = item->parent().toStrongRef();
+
+  if (!parent || parent->type() == "database") return item;
+
+  if (parent->type() == "namespace" && parent->getAllChilds().size() == 0)
+    return resolveItemToRemove(parent);
+
+  return item;
+}
+
+void AbstractNamespaceItem::removeObsoleteKeys(
+    QList<QWeakPointer<KeyItem>> keys) {
+  for (const auto &obsoleteKey : keys) {
+    auto key = obsoleteKey.toStrongRef();
+
+    if (!key) continue;
+
+    m_keysIndex.remove(key->getFullPath());
+
+    auto parent = key->parent().toStrongRef();
+
+    if (!parent) continue;
+
+    QSharedPointer<TreeItem> itemToRemoveFromModel = key;
+
+    if (parent->type() == "namespace" && parent->getAllChilds().size() == 1) {
+      itemToRemoveFromModel = resolveItemToRemove(parent);
+    }
+
+    if (!itemToRemoveFromModel) continue;
+
+    int row = itemToRemoveFromModel->row();
+
+    m_model.beforeItemChildRemoved(itemToRemoveFromModel->parent(), row);
+
+    auto parentHoldsItemToRemove =
+        itemToRemoveFromModel->parent().toStrongRef();
+
+    if (!parentHoldsItemToRemove) continue;
+
+    parentHoldsItemToRemove->removeChild(row);
+
+    m_model.itemChildRemoved(itemToRemoveFromModel);
+  }
+}
+
+void AbstractNamespaceItem::appendRawKey(const QByteArray &k) {
+    m_rawChildKeys.append(k);
+}
+
 void AbstractNamespaceItem::appendNamespace(
     QSharedPointer<AbstractNamespaceItem> item) {
   m_childNamespaces[item->getName()] = item;
-  m_childItems.append(item.staticCast<TreeItem>());
-
-  if (m_showNsOnTop) {
-    std::sort(m_childItems.begin(), m_childItems.end(), compareNamespaces);
-  }
+  insertChild(item.staticCast<TreeItem>());
 }
 
 uint AbstractNamespaceItem::childCount(bool recursive) const {
@@ -107,18 +193,49 @@ uint AbstractNamespaceItem::childCount(bool recursive) const {
   return count;
 }
 
+uint AbstractNamespaceItem::keysCount() const {
+  uint count = m_rawChildKeys.size();
+
+  for (const auto &item : m_childItems) {
+    if (item->supportChildItems()) {
+        auto ns = item.dynamicCast<AbstractNamespaceItem>();
+        if (ns) {
+            count += ns->keysCount();
+        }
+    } else {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+uint AbstractNamespaceItem::keysRenderingLimit() const
+{
+    QSettings appSettings;
+    return appSettings.value("app/treeItemMaxChilds", 1000).toUInt();
+}
+
 void AbstractNamespaceItem::clear() {
-  m_model.itemChildsUnloaded(getSelf());
+  m_model.beforeItemChildsUnloaded(getSelf());
   m_childItems.clear();
   m_childNamespaces.clear();
   m_rawChildKeys.clear();
   m_usedMemory = 0;
-}
 
-void AbstractNamespaceItem::notifyModel() {
-  qDebug() << "Notify model about loaded childs";
-  m_model.itemChildsLoaded(getSelf());
-  m_model.itemChanged(getSelf());
+  if (type() == "database") {
+    m_keysIndex.clear();
+  } else {
+    auto selfRef = getSelf().toStrongRef().dynamicCast<AbstractNamespaceItem>();
+    if (selfRef) {
+      auto root = resolveRootItem(selfRef);
+
+      if (root) {
+          root->removeNamespacedKeysFromIndex(getFullPath());
+      }
+    }
+  }
+
+  m_model.itemChildsUnloaded(getSelf());
 }
 
 void AbstractNamespaceItem::showLoadingError(const QString& err) {
@@ -149,10 +266,52 @@ bool compareChilds(QSharedPointer<TreeItem> first,
 }
 
 void AbstractNamespaceItem::sortChilds() {
-  emit m_model.beforeItemLayoutChanged(getSelf());
+  m_model.beforeItemLayoutChanged(getSelf());
   std::sort(m_childItems.begin(), m_childItems.end(), compareChilds);
-  emit m_model.itemLayoutChanged(getSelf());
-  emit m_model.itemChanged(getSelf());
+  m_model.itemLayoutChanged(getSelf());
+  m_model.itemChanged(getSelf());
+}
+
+void AbstractNamespaceItem::renderRawKeys(const RedisClient::Connection::RawKeysList &keylist,
+                                          QRegExp filter,
+                                          std::function<void()> callback,
+                                          bool appendNewItems,
+                                          bool checkPreRenderedItems,
+                                          int maxChildItems)
+{
+    if (!m_operations) {
+        return;
+    }
+
+    uint renderingLimit = qMax(static_cast<uint>(m_childItems.size()), keysRenderingLimit());
+
+    if (maxChildItems > 0) {
+        renderingLimit = static_cast<uint>(maxChildItems);
+    }
+
+    auto settings = ConnectionsTree::KeysTreeRenderer::RenderingSettigns{
+        filter, m_operations->getNamespaceSeparator(), getDbIndex(),
+        true, renderingLimit, appendNewItems, checkPreRenderedItems
+    };
+
+    AsyncFuture::observe(
+        QtConcurrent::run(&ConnectionsTree::KeysTreeRenderer::renderKeys,
+                          m_operations, keylist,
+                          qSharedPointerDynamicCast<AbstractNamespaceItem>(getSelf()),
+                          settings,
+                          m_model.expandedNamespaces))
+            .subscribe([callback]() { callback(); });
+}
+
+void AbstractNamespaceItem::ensureLoaderIsCreated()
+{
+    if (m_rawChildKeys.size() == 0) {
+        return;
+    }
+
+    m_model.beforeChildLoaded(getSelf(), 1);
+    m_loaderStub = QSharedPointer<TreeItem>(new LoadMoreItem(getSelf(), m_model));
+    m_model.childLoaded(getSelf());
 }
 
 QHash<QString, std::function<void()>> AbstractNamespaceItem::eventHandlers() {
@@ -207,15 +366,7 @@ void AbstractNamespaceItem::fetchMore() {
 
   lock();
 
-  QSettings appSettings;
-  const uint maxChilds = appSettings.value("app/treeItemMaxChilds", 1000).toUInt();
-
   int childsCount = m_childItems.size();
-  auto settings = ConnectionsTree::KeysTreeRenderer::RenderingSettigns{
-      m_filter, m_operations->getNamespaceSeparator(), m_dbIndex, false,
-      static_cast<uint>(childsCount) + maxChilds, false
-  };
-
   auto rawKeys = m_rawChildKeys;
 
   // Remove loader
@@ -230,6 +381,7 @@ void AbstractNamespaceItem::fetchMore() {
   m_childCountBeforeFetch = childsCount;
   m_rawChildKeys.clear();
 
+  const uint maxChilds = keysRenderingLimit();
   int nextChunkSize = qMin(static_cast<int>(maxChilds),
                            rawKeys.size());
 
@@ -237,16 +389,17 @@ void AbstractNamespaceItem::fetchMore() {
 
   m_model.beforeChildLoaded(getSelf(), nextChunkSize);
 
-  unlock();
-  AsyncFuture::observe(
-      QtConcurrent::run(
-          &ConnectionsTree::KeysTreeRenderer::renderKeys, m_operations, rawKeys,
-          qSharedPointerDynamicCast<AbstractNamespaceItem>(getSelf()), settings,
-          m_model.m_expanded))
-      .subscribe([this]() {
-           m_model.childLoaded(getSelf());
-           m_model.itemChanged(getSelf());
-      });
+  return renderRawKeys(rawKeys, m_filter, [this]() {
+    m_model.childLoaded(getSelf());
+
+    if (m_rawChildKeys.size() > 0) {
+        m_model.beforeChildLoaded(getSelf(), 1);
+        m_loaderStub = QSharedPointer<TreeItem>(new LoadMoreItem(getSelf(), m_model));
+        m_model.childLoaded(getSelf());
+    }
+
+    unlock();
+  }, true, false, static_cast<uint>(childsCount) + maxChilds);
 }
 
 uint AbstractNamespaceItem::childCountBeforeFetch()

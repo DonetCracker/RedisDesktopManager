@@ -14,6 +14,7 @@
 #include "keyitem.h"
 #include "namespaceitem.h"
 #include "serveritem.h"
+#include "loadmoreitem.h"
 
 using namespace ConnectionsTree;
 
@@ -43,12 +44,7 @@ QString DatabaseItem::getDisplayName() const {
 
 bool DatabaseItem::isEnabled() const { return true; }
 
-void DatabaseItem::notifyModel() {
-  unlock();
-  AbstractNamespaceItem::notifyModel();
-}
-
-void DatabaseItem::loadKeys(std::function<void()> callback) {
+void DatabaseItem::loadKeys(std::function<void()> callback, bool partialReload) {
   lock();
 
   QString filter = (m_filter.isEmpty()) ? "" : m_filter.pattern();
@@ -72,23 +68,41 @@ void DatabaseItem::loadKeys(std::function<void()> callback) {
 
         if (dbMapping.contains(m_dbIndex)) {
           m_keysCount = dbMapping[m_dbIndex];
-          emit m_model.itemChanged(getSelf());
+          m_model.itemChanged(getSelf());
         }
       };
 
   m_operations->getDatabases(dbLoadCallback);
 
-  m_operations->loadNamespaceItems(
-      qSharedPointerDynamicCast<AbstractNamespaceItem>(self), filter,
-      [this, callback](const QString& err) {
-        unlock();
-        if (!err.isEmpty()) return showLoadingError(err);
+  QSettings appSettings;
+  const uint maxChilds =
+      appSettings.value("app/treeItemMaxChilds", 1000).toUInt();
 
-        if (callback) {
-          callback();
+  auto onKeysRendered = [this, callback]() {
+    ensureLoaderIsCreated();
+
+    unlock();
+    setExpanded(true);
+    m_model.itemChanged(getSelf());
+    m_model.expandItem(getSelf());
+
+    if (callback) {
+      callback();
+    }
+  };
+
+  m_operations->loadNamespaceItems(
+      m_dbIndex, filter,
+      [this, onKeysRendered](
+          const RedisClient::Connection::RawKeysList& keylist,
+          const QString& err) {
+        if (!err.isEmpty()) {
+          unlock();
+          return showLoadingError(err);
         }
-      },
-      m_model.m_expanded);
+
+        return renderRawKeys(keylist, m_filter, onKeysRendered, true, false);
+      });
 }
 
 QVariantMap DatabaseItem::metadata() const {
@@ -169,9 +183,8 @@ void DatabaseItem::unload(bool notify) {
   unlock();
 }
 
-void DatabaseItem::reload(std::function<void()> callback) {
-  unload(false);
-  loadKeys(callback);
+void DatabaseItem::reload(std::function<void()> callback) {  
+  loadKeys(callback, true);
 }
 
 void DatabaseItem::performLiveUpdate() {

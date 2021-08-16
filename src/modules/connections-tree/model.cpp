@@ -12,7 +12,7 @@ using namespace ConnectionsTree;
 Model::Model(QObject *parent)
     : QAbstractItemModel(parent),
       m_rawPointers(new QHash<TreeItem *, QWeakPointer<TreeItem>>()) {
-  qRegisterMetaType<QWeakPointer<TreeItem>>("QWeakPointer<TreeItem>");
+  qRegisterMetaType<QWeakPointer<TreeItem>>("QWeakPointer<TreeItem>");  
 }
 
 QVariant Model::data(const QModelIndex &index, int role) const {
@@ -135,54 +135,69 @@ void Model::itemChanged(QWeakPointer<TreeItem> item) {
   emit dataChanged(index, index);
 }
 
-void Model::itemChildsLoaded(QWeakPointer<TreeItem> item) {
-  if (!item) return;
+void Model::beforeItemChildsUnloaded(QWeakPointer<TreeItem> item)
+{
+    if (!item) return;
 
-  auto index = getIndexFromItem(item);
+    auto index = getIndexFromItem(item);
 
-  if (!index.isValid()) return;
+    if (!index.isValid()) return;
 
-  QSharedPointer<TreeItem> treeItem = item.toStrongRef();
+    auto itemPtr = item.toStrongRef();
 
-  if (treeItem->getAllChilds().size() == 0) {
-    return;
-  }
+    if (!itemPtr || itemPtr->childCount() == 0)
+        return;
 
-  beginInsertRows(index, treeItem->childCountBeforeFetch(),
-                       treeItem->getAllChilds().size());
-  endInsertRows();
+    auto childItems = itemPtr->getAllChilds();
 
-  emit dataChanged(index, index);
+    m_pendingRemoval[itemPtr] = {};
 
-  if (treeItem->type() == "database") {
-    emit expand(index);
-
-    QSettings settings;
-    m_expanded.clear();
-
-    if (settings.value("app/reopenNamespacesOnReload", true).toBool()) {
-      restoreOpenedNamespaces(treeItem.staticCast<AbstractNamespaceItem>());
+    for (auto child : childItems) {
+        m_pendingRemoval[itemPtr].append(child.toWeakRef());
     }
-  } else if (treeItem->type() == "server"
-             || treeItem->type() == "server_group"
-             || treeItem->type() == "namespace") {
-    emit expand(index);
-    emit dataChanged(index, index);
-  }
+
+    beginRemoveRows(index, 0, itemPtr->childCount() - 1);
 }
 
-void Model::itemChildsUnloaded(QWeakPointer<TreeItem> item) {
-  if (!item) return;
+void Model::itemChildsUnloaded(QWeakPointer<TreeItem> item)
+{
+    if (!item) return;
 
-  auto index = getIndexFromItem(item);
+    auto strongRef = item.toStrongRef();
 
-  if (!index.isValid()) return;
+    if (m_pendingRemoval.contains(strongRef)) {
 
-  if (item.toStrongRef()->childCount() == 0)
-      return;
+        for (const auto &child: m_pendingRemoval[strongRef]) {
+            auto childPtr = child.toStrongRef();
 
-  beginRemoveRows(index, 0, item.toStrongRef()->childCount() - 1);
-  endRemoveRows();
+            if (!childPtr) {
+                continue;
+            }
+
+            if (m_rawPointers->contains(childPtr.data())) {
+                m_rawPointers->remove(childPtr.data());
+            }
+        }
+
+        m_pendingRemoval.remove(strongRef);
+    }
+
+    endRemoveRows();
+}
+
+void Model::beforeChildLoadedAtPos(QWeakPointer<TreeItem> item, int pos)
+{
+    if (!item) return;
+
+    auto index = getIndexFromItem(item);
+
+    if (!index.isValid()) return;
+
+    auto treeItem = item.toStrongRef();
+
+    if (!treeItem) return;
+
+    beginInsertRows(index, pos, pos);
 }
 
 void Model::beforeChildLoaded(QWeakPointer<TreeItem> item, int count)
@@ -225,11 +240,11 @@ void Model::beforeItemChildRemoved(QWeakPointer<TreeItem> item, int row)
     beginRemoveRows(index, row, row);
 }
 
-void Model::itemChildRemoved(QWeakPointer<TreeItem> item)
+void Model::itemChildRemoved(QWeakPointer<TreeItem> childItem)
 {
-    if (!item) return;
+    if (!childItem) return;
 
-    auto strongRef = item.toStrongRef();
+    auto strongRef = childItem.toStrongRef();
 
     if (strongRef && m_rawPointers->contains(strongRef.data())) {
         m_rawPointers->remove(strongRef.data());
@@ -330,7 +345,7 @@ void Model::setExpanded(const QModelIndex &index) {
 
   if (!item || item->type() != "namespace") return;
 
-  m_expanded.insert(item->getFullPath());
+  expandedNamespaces.insert(item->getFullPath());
 }
 
 void Model::setCollapsed(const QModelIndex &index) {
@@ -340,7 +355,7 @@ void Model::setCollapsed(const QModelIndex &index) {
 
   // TODO: remove child ns
 
-  m_expanded.remove(item->getFullPath());
+  expandedNamespaces.remove(item->getFullPath());
 }
 
 void Model::collapseRootItems()
@@ -475,19 +490,4 @@ void Model::removeRootItem(QSharedPointer<TreeItem> item) {
   beginRemoveRows(QModelIndex(), item->row(), item->row());
   m_treeItems.removeAll(item);
   endRemoveRows();
-}
-
-void Model::restoreOpenedNamespaces(QSharedPointer<AbstractNamespaceItem> ns)
-{
-    if (ns->type() == "namespace" && !ns->isExpanded())
-        return;
-
-    if (ns->isExpanded())
-        emit expand(getIndexFromItem(ns.staticCast<TreeItem>().toWeakRef()));
-
-    auto childs = ns->getAllChildNamespaces();
-
-    for (auto childNs : childs) {
-        restoreOpenedNamespaces(childNs);
-    }
 }

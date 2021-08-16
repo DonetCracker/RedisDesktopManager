@@ -6,6 +6,23 @@
 
 using namespace ConnectionsTree;
 
+QSharedPointer<AbstractNamespaceItem> ConnectionsTree::resolveRootItem(QSharedPointer<AbstractNamespaceItem> item) {
+  if (!item) return QSharedPointer<AbstractNamespaceItem>();
+
+  if (item->type() == "database") {
+      return item;
+  }
+
+  auto parent = item->parent().toStrongRef();
+
+  if (!parent) return QSharedPointer<AbstractNamespaceItem>();
+
+  if (parent->type() == "database")
+    return parent.dynamicCast<AbstractNamespaceItem>();
+
+  return resolveRootItem(parent.dynamicCast<AbstractNamespaceItem>());
+}
+
 void KeysTreeRenderer::renderKeys(QSharedPointer<Operations> operations,
                                   RedisClient::Connection::RawKeysList keys,
                                   QSharedPointer<AbstractNamespaceItem> parent,
@@ -22,7 +39,6 @@ void KeysTreeRenderer::renderKeys(QSharedPointer<Operations> operations,
 
   // render
   timer.restart();
-
   int unprocessedPartStart = 0;
   if (parent->getFullPath().size() > 0 || parent->type() == "namespace") {
     unprocessedPartStart =
@@ -32,8 +48,35 @@ void KeysTreeRenderer::renderKeys(QSharedPointer<Operations> operations,
   QByteArray rawKey;
   QByteArray nextKey;
 
+  auto rootItem = resolveRootItem(parent);
+
+  QHash<QByteArray, QWeakPointer<KeyItem>> preRenderedKeys;
+
+  if (rootItem) {
+      preRenderedKeys = rootItem->getKeysIndex();
+  }
+  qDebug() << "Pre-rendered keys: " << preRenderedKeys.size();
+
+  auto preRenderedKeysList = preRenderedKeys.keys();
+  QSet<QByteArray> preRenderedKeysToBeRemoved;
+
+  if (settings.checkPreRenderedItems) {
+    preRenderedKeysToBeRemoved = QSet<QByteArray>(preRenderedKeysList.begin(),
+                                                  preRenderedKeysList.end());
+  }
+
+  qDebug() << "Live update: " << settings.checkPreRenderedItems;
+  qDebug() << "Fetching:" << (preRenderedKeys.size() > 0);
+
   while (!keys.isEmpty()) {
     rawKey = keys.takeFirst();
+
+    if (preRenderedKeysList.contains(rawKey)) {
+        if (preRenderedKeysToBeRemoved.contains(rawKey)) {
+            preRenderedKeysToBeRemoved.remove(rawKey);
+        }
+        continue;
+    }
 
     if (keys.size() > 0) {
         nextKey = keys[0];
@@ -42,7 +85,7 @@ void KeysTreeRenderer::renderKeys(QSharedPointer<Operations> operations,
     }
 
     try {
-      renderLazily(parent, rawKey.mid(unprocessedPartStart), rawKey, operations,
+      renderLazily(rootItem, parent, rawKey.mid(unprocessedPartStart), rawKey, operations,
                    settings, expandedNamespaces, 0, nextKey);
     } catch (std::bad_alloc &) {
       parent->showLoadingError("Not enough memory to render all keys");
@@ -51,11 +94,18 @@ void KeysTreeRenderer::renderKeys(QSharedPointer<Operations> operations,
   }
   qDebug() << "Tree builded in: " << timer.elapsed() << " ms";
 
-  if (settings.notifyModel)
-    parent->notifyModel();
+  if (preRenderedKeysToBeRemoved.size() > 0) {
+    QList<QWeakPointer<KeyItem>> obsoleteKeys;
+
+    for (const auto &keyFullPath : qAsConst(preRenderedKeysToBeRemoved)) {
+      obsoleteKeys.append(preRenderedKeys[keyFullPath]);
+    }
+
+    parent->removeObsoleteKeys(obsoleteKeys);
+  }
 }
 
-void KeysTreeRenderer::renderLazily(
+void KeysTreeRenderer::renderLazily(QSharedPointer<AbstractNamespaceItem> root,
     QSharedPointer<AbstractNamespaceItem> parent,
     const QByteArray &notProcessedKeyPart, const QByteArray &fullKey,
     QSharedPointer<Operations> m_operations, const RenderingSettigns &settings,
@@ -82,7 +132,16 @@ void KeysTreeRenderer::renderLazily(
     } else {
         QSharedPointer<KeyItem> newKey(
             new KeyItem(fullKey, currentParent, parent->model()));
-        parent->append(newKey);
+
+        if (settings.appendNewItems) {
+            parent->append(newKey);
+        } else {
+            parent->insertChild(newKey);
+        }
+
+        if (root && root->type() == "database") {
+            root->appendKeyToIndex(newKey);
+        }
     }
     return;
   }
@@ -117,8 +176,9 @@ void KeysTreeRenderer::renderLazily(
     parent->appendNamespace(namespaceItem);
   }
 
-  renderLazily(namespaceItem,
+  renderLazily(root, namespaceItem,
                notProcessedKeyPart.mid(indexOfNaspaceSeparator +
                                        settings.nsSeparator.length()),
-               fullKey, m_operations, settings, expandedNamespaces, level + 1, nextKey);
+               fullKey, m_operations, settings, expandedNamespaces,
+               level + 1, nextKey);
 }

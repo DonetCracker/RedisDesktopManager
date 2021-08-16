@@ -84,16 +84,21 @@ void ServerItem::load() {
         }
 
         RedisClient::DatabaseList::const_iterator db = databases.constBegin();
+        QList<QSharedPointer<TreeItem>> dbs;
         while (db != databases.constEnd()) {
           QSharedPointer<TreeItem> database((new DatabaseItem(
               db.key(), db.value(), m_operations, m_self, m_model)));
 
-          m_databases.push_back(database);
+          dbs.push_back(database);
           ++db;
         }
 
+        m_model.beforeChildLoaded(getSelf(), dbs.size());
+        m_databases = dbs;
+        m_model.childLoaded(getSelf());
+
         unlock();
-        m_model.itemChildsLoaded(m_self);
+        m_model.expandItem(getSelf());
       };
 
   m_currentOperation = m_operations->getDatabases(callback);
@@ -118,7 +123,7 @@ void ServerItem::unload() {
 
   lock();
 
-  m_model.itemChildsUnloaded(m_self);
+  m_model.beforeItemChildsUnloaded(m_self);
 
   m_operations->disconnect();
 
@@ -131,7 +136,7 @@ void ServerItem::unload() {
   }
 
   m_databases.clear();
-
+  m_model.itemChildsUnloaded(getSelf());
   unlock();
 }
 

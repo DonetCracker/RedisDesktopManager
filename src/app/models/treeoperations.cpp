@@ -183,61 +183,41 @@ QFuture<void> TreeOperations::getDatabases(
 }
 
 void TreeOperations::loadNamespaceItems(
-    QSharedPointer<ConnectionsTree::AbstractNamespaceItem> parent,
-    const QString& filter, std::function<void(const QString& err)> callback,
-    QSet<QByteArray> expandedNs) {
+    uint dbIndex,
+    const QString& filter,
+    std::function<void(const RedisClient::Connection::RawKeysList& keylist,
+                       const QString& err)>
+        callback) {
   QString keyPattern = filter.isEmpty() ? m_config.keysPattern() : filter;
 
   if (m_filterHistory.contains(keyPattern)) {
-      m_filterHistory[keyPattern] = m_filterHistory[keyPattern].toInt() + 1;
+    m_filterHistory[keyPattern] = m_filterHistory[keyPattern].toInt() + 1;
   } else {
-      m_filterHistory[keyPattern] = 1;
+    m_filterHistory[keyPattern] = 1;
   }
   m_config.setFilterHistory(m_filterHistory);
   emit filterHistoryUpdated();
-
-  auto renderingCallback =
-      [this, callback, filter, parent, expandedNs](
-          const RedisClient::Connection::RawKeysList& keylist,
-          const QString& err) {
-        if (!err.isEmpty()) {
-          return callback(err);
-        }
-
-        QSettings appSettings;
-        const uint maxChilds = appSettings.value("app/treeItemMaxChilds", 1000).toUInt();
-
-        auto settings = ConnectionsTree::KeysTreeRenderer::RenderingSettigns{
-            QRegExp(filter), getNamespaceSeparator(), parent->getDbIndex(),
-            true, maxChilds, true
-        };
-
-        AsyncFuture::observe(
-            QtConcurrent::run(&ConnectionsTree::KeysTreeRenderer::renderKeys,
-                              sharedFromThis(), keylist, parent, settings,
-                              expandedNs))
-            .subscribe([callback]() { callback(QString()); });
-      };
 
   if (!connect(m_connection)) return;
 
   auto processErr = [callback](const QString& err) {
     return callback(
+        RedisClient::Connection::RawKeysList(),
         QCoreApplication::translate("RDM", "Cannot load keys: %1").arg(err));
-  };  
+  };
 
   try {
     if (m_connection->mode() == RedisClient::Connection::Mode::Cluster) {
-      m_connection->getClusterKeys(renderingCallback, keyPattern);
+      m_connection->getClusterKeys(callback, keyPattern);
     } else {
       m_connection->cmd(
-          {"ping"}, this, parent->getDbIndex(),
-          [this, callback, renderingCallback, keyPattern,
+          {"ping"}, this, dbIndex,
+          [this, callback, keyPattern,
            processErr](const RedisClient::Response& r) {
             if (r.isErrorMessage()) {
               return processErr(r.value().toString());
             }
-            m_connection->getDatabaseKeys(renderingCallback, keyPattern, -1);
+            m_connection->getDatabaseKeys(callback, keyPattern, -1);
           },
           [processErr](const QString& err) { return processErr(err); });
     }

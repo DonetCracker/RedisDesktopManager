@@ -62,7 +62,7 @@ class Model : public QAbstractItemModel {
 
   QModelIndex getIndexFromItem(QWeakPointer<TreeItem>);
 
-  QSet<QByteArray> m_expanded;
+  QSet<QByteArray> expandedNamespaces;
 
  signals:
   void expand(const QModelIndex &index);
@@ -70,11 +70,13 @@ class Model : public QAbstractItemModel {
   void error(const QString &err);
 
  public:
-  void itemChanged(QWeakPointer<TreeItem> item);
+  void itemChanged(QWeakPointer<TreeItem> item);  
 
-  void itemChildsLoaded(QWeakPointer<TreeItem> item);
+  void beforeItemChildsUnloaded(QWeakPointer<TreeItem> item);
 
   void itemChildsUnloaded(QWeakPointer<TreeItem> item);
+
+  void beforeChildLoadedAtPos(QWeakPointer<TreeItem> item, int pos);
 
   void beforeChildLoaded(QWeakPointer<TreeItem> item, int count);
 
@@ -82,7 +84,7 @@ class Model : public QAbstractItemModel {
 
   void beforeItemChildRemoved(QWeakPointer<TreeItem> item, int row);
 
-  void itemChildRemoved(QWeakPointer<TreeItem> item);
+  void itemChildRemoved(QWeakPointer<TreeItem> childItem);
 
   void expandItem(QWeakPointer<TreeItem> item);
 
@@ -113,13 +115,12 @@ class Model : public QAbstractItemModel {
  protected:
   void addRootItem(QSharedPointer<ConnectionsTree::SortableTreeItem> item);
 
-  void removeRootItem(QSharedPointer<TreeItem> item);
-
-  void restoreOpenedNamespaces(QSharedPointer<AbstractNamespaceItem> ns);
+  void removeRootItem(QSharedPointer<TreeItem> item);  
 
  protected:
   QList<QSharedPointer<TreeItem>> m_treeItems;
   QSharedPointer<QHash<TreeItem *, QWeakPointer<TreeItem>>> m_rawPointers;
   QHash<QSharedPointer<TreeItem>, QModelIndex> m_pendingChanges;
+  QHash<QSharedPointer<TreeItem>, QList<QWeakPointer<TreeItem>>> m_pendingRemoval;
 };
 }  // namespace ConnectionsTree
